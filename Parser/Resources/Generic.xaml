@@ -1,0 +1,9 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:Parser">
+    <ResourceDictionary x:Key="Default">
+
+        <SolidColorBrush x:Key="ButtonBackgroundThemeBrush" Color="Transparent" />
+        <SolidColorBrush x:Key="ButtonForegroundThemeBrush" Color="#FFFFFFFF" />
+    </ResourceDictionary>
+</ResourceDictionary>
