@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.IO;
+using System.ComponentModel;
 using System.Windows.Threading;
 using System.Threading.Tasks;
 using System.ComponentModel.Composition;
@@ -68,114 +69,145 @@ namespace Parser
         //Метод, обрабатывающй файлы в рабочем каталоге
         private async Task FileProcAsync(string fullname, string shortname)
         {
-            //создаем коллекцию для временного хранения данных из обрабатываемх файлов
-            IList<IRecord> tmplr = new List<IRecord>();
+            IList<IRecord> TmpLr = new List<IRecord>();
+
+            //bool bgcomplit = false;
 
             try
             {
-                //Проверяем свободен ли файл и ожидаем его разблокировки
+                BackgroundWorker BW = new BackgroundWorker
+                {
+                    WorkerReportsProgress = true
+                };
+
                 if (await AwaitFileUnlock(fullname))
                 {
-                    //Сохраняем ID текущего потока и обнуляем индекс обрабатываемого файла коллекции
-                    int CurThread = Thread.CurrentThread.ManagedThreadId;
+
+                    int CurThread = 0;
                     int CurItem = 0;
 
-                    //Обработчик события на изменения прогресса загрузки файла
                     void eventHandler(object obj, ProgressEventArgs ev)
                     {
-                        //Проверяем, что событие получено для текущего потока 
                         if (CurThread == ev.ThreadId)
-                        {
-                            //Выполняем обновление данных в потоке GUI
-                            Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
-                                                                                           new Action(() =>
-                                                                                           {
-                                                                                               //Обновляем прогресс исполнения и информационное сообщение для обрабатываемого файла
-                                                                                               ProcFiles[CurItem].Completion = ev.Progress;
-                                                                                               ProcFiles[CurItem].Message = ev.Progress.ToString() + "%";
-                                                                                           }));
-#if DEBUG
-                            Debug.WriteLine($"Из события процент загрузки файла: {fullname} - {ev.Progress}");
-#endif
-                        }
+                            BW.ReportProgress(ev.Progress);
                     }
 
-                    //Подписываемся на событие
                     Contract.ProgressUpdated += eventHandler;
 
-                    try
+                    BW.DoWork += (o, e) =>
                     {
-                        //Создаем экземпляр класса ProcFile
-                        ProcFile PF = new ProcFile()
+                        try
                         {
-                            //Устанавливаем значения его свойств
-                            FileName = shortname,
-                            Completion = 0
-                        };
+                            ProcFile PF = new ProcFile()
+                            {
+                                FileName = shortname,
+                                Completion = 0
+                            };
 
-                        //Блокируем коллекцию ProcFiles на период добавления в неё новой записи
-                        lock (Locker)
+                            lock (Locker)
+                            {
+                                Application.Current.Dispatcher.Invoke(DispatcherPriority.Normal,
+                                                                                              new Action(() =>
+                                                                                              {
+                                                                                                  ProcFiles.Add(PF);
+                                                                                              }));
+
+                                CurItem = ProcFiles.IndexOf(PF);
+                            }
+
+                            CurThread = Thread.CurrentThread.ManagedThreadId;
+
+                            TmpLr = Contract.LoadData(fullname);
+
+                            e.Result = TmpLr;
+                        }
+                        catch (FormatException)
                         {
-                            //Выполняем обновление данных в потоке GUI
-                            Application.Current.Dispatcher.Invoke(DispatcherPriority.Normal,
-                                                                                            new Action(() =>
-                                                                                            {
-                                                                                                        //Добавлем элемент в колекцию с данными об обрабатываемх файлах
-                                                                                                        ProcFiles.Add(PF);
-                                                                                            }));
-                            //Получаем ID добавленного элемента в коллекции
-                            CurItem = ProcFiles.IndexOf(PF);
+                            //Выводим информационное сообщение об том, что файл содержит не верные данные
+                            ProcFiles[CurItem].Message = "File has wrong data";
+                            //Удаляем файл с поврежденными данными из рабочего каталога
+                            DeleteFile(fullname);
+
+
+                        }
+                        catch (FileTypeException)
+                        {
+                            //Выводим информационное сообщение о том, что файл не поддерживается
+                            ProcFiles[CurItem].Message = "File not supported";
+                            //Удалем не поддерживаемый файл из рабочего каталога
+                            DeleteFile(fullname);
+
+                        }
+                        catch
+                        {
+                            //Отлавливаем остальные исключения и передаем их обработку на верхний уровень
+                            throw;
                         }
 
-                        //Загружаем данные из файла
-                        tmplr = Contract.LoadData(fullname);
+                        finally
+                        {
+                            //Отписываемся от события
+                            Contract.ProgressUpdated -= eventHandler;
+                            TmpLr = null;
+                        }
 
-                        //Удаляем обработанный файл
-                        DeleteFile(fullname);
+                    };
 
-                    }
-                    catch (FormatException)
+                    BW.ProgressChanged += async (o, e) =>
                     {
-                        //Выводим информационное сообщение об том, что файл содержит не верные данные
-                        ProcFiles[CurItem].Message = "File has wrong data";
-                        //Удаляем файл с поврежденными данными из рабочего каталога
-                        DeleteFile(fullname);
-
-                    }
-                    catch (FileTypeException)
-                    {
-                        //Выводим информационное сообщение о том, что файл не поддерживается
-                        ProcFiles[CurItem].Message = "File not supported";
-                        //Удалем не поддерживаемый файл из рабочего каталога
-                        DeleteFile(fullname);
-                    }
-                    catch
-                    {
-                        //Отлавливаем остальные исключения и передаем их обработку на верхний уровень
-                        throw;
-                    }
-                    finally
-                    {
-                        //Отписываемся от события
-                        Contract.ProgressUpdated -= eventHandler;
-                    }
-
-                    foreach (IRecord recs in tmplr)
-                    {
-                        //Добавляем данные из временной коллекции в рабочую коллекцию выполняя это в потоке GUI
                         await Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
-                                                                                    new Action(() =>
-                                                                                    {
-                                                                                        Records.Add(recs);
-                                                                                    }));
-                    }
+                                                                                           new Action(() =>
+                                                                                           {
+                                                                                               ProcFiles[CurItem].Completion = e.ProgressPercentage;
+                                                                                               ProcFiles[CurItem].Message = e.ProgressPercentage.ToString() + "%";
+                                                                                           }));
 
+#if DEBUG
+                        Debug.WriteLine($"Из события процент загрузки файла: {fullname} - {e.ProgressPercentage}");
+#endif
+                    };
+
+                    BW.RunWorkerCompleted += async (o, e) =>
+                    {
+
+                        if (e.Error == null)
+                        {
+                            try
+                            {
+                                //bgcomplit = true;
+                                //Удаляем обработанный файл
+                                DeleteFile(fullname);
+                            }
+                            catch
+                            {
+                                //Отлавливаем остальные исключения и передаем их обработку на верхний уровень
+                                throw;
+                            }
+
+                            IList<IRecord> res = (IList<IRecord>)e.Result;
+
+                            if (res != null)
+                            {
+                                foreach (IRecord recs in res)
+                                {
+                                    await Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
+                                                                                                    new Action(() =>
+                                                                                                    {
+                                                                                                        Records.Add(recs);
+                                                                                                    }));
+                                }
+                            }
+
+                        }
+
+                    };
+
+                    await Task.Factory.StartNew(() => { BW.RunWorkerAsync(); });
                 }
 
             }
             catch (Exception err)
             {
-                //Отлавливаем исключения и передаем их обработку на верхний уровень
                 throw new Exception($"File processing error (" + err.Message + ")");
             }
 
