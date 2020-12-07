@@ -189,15 +189,21 @@ namespace Parser
 
             try
             {
-                foreach (FileInfo Fi in DataFiles)
+                //Групповая обработка файлов выполняется посредством цикла Parallel.ForEarch, реализующего параллельную обработку файлов
+                //Task обеспечивает завуск обработки в фоновом потоке
+                Task.Factory.StartNew(() =>
                 {
-                    FileInfo TempFi = Fi;
+                    Parallel.ForEach(DataFiles, async (Fi) =>
+                    {
+                        FileInfo TempFi = Fi;
 
-                    string FullFileName = Config.WorkDir + TempFi.Name;
+                        string FullFileName = Config.WorkDir + TempFi.Name;
 
-                    //Создаем Task чтобы передать выполнение обработки файла в отдельный поток
-                    Task.Factory.StartNew(async () => { await FileProcAsync(FullFileName, TempFi.Name); });
-                }
+                        await FileProcAsync(FullFileName, TempFi.Name); 
+
+                    });
+                });
+
             }
             catch
             {
@@ -213,56 +219,50 @@ namespace Parser
             //Формируем список файлов для обработки
             FileInfo[] DataFiles = FL.ReadFilesAtt(Config.WorkDir);
 
-            foreach (FileInfo Fi in DataFiles)
+            //Групповая обработка файлов выполняется посредством цикла Parallel.ForEarch, реализующего параллельную обработку файлов
+            //Task обеспечивает завуск обработки в фоновом потоке
+            Task.Factory.StartNew(() =>
             {
-                //Сохраняем информацию о текущем файле во временной переменной
-                FileInfo TempFi = Fi;
-
-                //Формируем полный путь к фалу
-                string FullFileName = Config.WorkDir + TempFi.Name;
-
-                //Таймер ведет отдельную коллекцию - очередь файлов на обработку
-                //Это нужно, чтобы файлы которые уже попали в список файлов на обработку и не успели
-                //обработаться до повторного срабатывания таймера, не добавлялиь в список повторно
-                //Переменная count используется как индикатор наличия файла в очереди на обработку
-                int Counter = 0;
-
-
-                //Проверяем наличие файла в очереди на обработку по его имени,
-                //если файла нет в очедери - добавляем
-                //Переменная locker используется для блокировки коллекции на время добавления новой записи
-                lock (Locker_)
+                Parallel.ForEach(DataFiles, async (Fi) =>
                 {
-                    Counter = (from FQ in FileQueue where FQ.Name == TempFi.Name select FQ).Count();
-                    if (Counter == 0) FileQueue.Add(TempFi);
-                }
+                    //Сохраняем информацию о текущем файле во временной переменной
+                    FileInfo TempFi = Fi;
 
-                //Ставим файл в очередь на обработку
-                if (Counter == 0)
-                {
-                    //Создаем Task чтобы передать выполнение обработки файла в отдельный поток
-                    Task FileLoadTask = Task.Factory.StartNew(async () => { await FileProcAsync(FullFileName, TempFi.Name); });
+                    //Формируем полный путь к фалу
+                    string FullFileName = Config.WorkDir + TempFi.Name;
 
-                    //FileLoadTask.Wait();
+                    //Таймер ведет отдельную коллекцию - очередь файлов на обработку
+                    //Это нужно, чтобы файлы которые уже попали в список файлов на обработку и не успели
+                    //обработаться до повторного срабатывания таймера, не добавлялиь в список повторно
+                    //Переменная count используется как индикатор наличия файла в очереди на обработку
+                    int Counter = 0;
 
-                    //lock (Locker)
-                    //{
-                    //    FileInfo _Fi = (from FQ in FileQueue where FQ.Name == TempFi.Name select FQ).First();
-                    //    if (_Fi != null) FileQueue.Remove(TempFi);
-                    //}
 
-                    //Удаляем обработанный файл из очереди
-                    FileLoadTask.ContinueWith(t =>
+                    //Проверяем наличие файла в очереди на обработку по его имени,
+                    //если файла нет в очедери - добавляем
+                    //Переменная locker используется для блокировки коллекции на время добавления новой записи
+                    lock (Locker_)
                     {
+                        Counter = (from FQ in FileQueue where FQ.Name == TempFi.Name select FQ).Count();
+                        if (Counter == 0) FileQueue.Add(TempFi);
+                    }
+
+                    //Ставим файл в очередь на обработку
+                    if (Counter == 0)
+                    {
+                        //Запускаем выполнение обработки файла
+                        await FileProcAsync(FullFileName, TempFi.Name);
+
+                        //Удаляем обработанный файл из очереди
                         lock (Locker_)
                         {
                             FileInfo _Fi = (from FQ in FileQueue where FQ.Name == TempFi.Name select FQ).First();
                             if (_Fi != null) FileQueue.Remove(TempFi);
                         }
-                    });
 
-                }
-            }
+                    }
+                });
+            });
         }
 
         //Событие экземпляра класса FileSystemWatcher
